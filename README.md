@@ -24,3 +24,7 @@ drivecat sources
 
 The database defaults to `%LOCALAPPDATA%\drivecat\drivecat.db`; override it with `--db PATH` or `DRIVECAT_DB`.
 `identify`, `scan` and `report` are planned and not implemented yet.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

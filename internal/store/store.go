@@ -5,10 +5,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"net/url"
-	"os"
-	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -17,38 +15,6 @@ import (
 // Store is an open drivecat database.
 type Store struct {
 	db *sql.DB
-}
-
-// Open opens the database at path, creating it and its folder if needed,
-// and applies any pending schema migrations.
-func Open(ctx context.Context, path string) (*Store, error) {
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("create database folder: %w", err)
-		}
-	}
-
-	// Pragmas in the DSN run on every new connection, which matters for
-	// foreign_keys: it is a per-connection setting in SQLite.
-	q := url.Values{}
-	q.Add("_pragma", "foreign_keys(1)")
-	q.Add("_pragma", "journal_mode(WAL)")
-	q.Add("_pragma", "synchronous(NORMAL)")
-	q.Add("_pragma", "busy_timeout(5000)")
-	db, err := sql.Open("sqlite", path+"?"+q.Encode())
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	// One connection: drivecat has a single writer, and this rules out
-	// SQLITE_BUSY between its own connections.
-	db.SetMaxOpenConns(1)
-
-	s := &Store{db: db}
-	if err := s.migrate(ctx); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return s, nil
 }
 
 // Close closes the database.
@@ -95,6 +61,17 @@ func (s *Store) migrate(ctx context.Context) error {
 // RFC 3339 with nanoseconds, so equal instants compare equal as text.
 func Timestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// FindSource looks a source up by fingerprint. found is false if there is
+// none.
+func (s *Store) FindSource(ctx context.Context, fingerprint string) (id int64, label string, found bool, err error) {
+	err = s.db.QueryRowContext(ctx, "SELECT id, label FROM sources WHERE fingerprint = ?", fingerprint).
+		Scan(&id, &label)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", false, nil
+	}
+	return id, label, err == nil, err
 }
 
 // SourceSummary is one row of the sources listing.

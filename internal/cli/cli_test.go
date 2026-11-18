@@ -67,9 +67,73 @@ func TestUsageErrors(t *testing.T) {
 }
 
 func TestNotImplementedYet(t *testing.T) {
-	db := filepath.Join(t.TempDir(), "drivecat.db")
-	if code, _, errOut := run(t, "--db", db, "scan", "E:\\"); code != 1 || !strings.Contains(errOut, "not implemented") {
+	// A temp folder, never a real drive: once scan exists, this test must
+	// not scan whatever happens to be E: on the machine running it.
+	dir := t.TempDir()
+	db := filepath.Join(dir, "drivecat.db")
+	if code, _, errOut := run(t, "--db", db, "scan", dir); code != 1 || !strings.Contains(errOut, "not implemented") {
 		t.Errorf("scan: code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestDBPathMustBeAbsolute(t *testing.T) {
+	if code, _, errOut := run(t, "--db", "drivecat.db", "init"); code != 2 || !strings.Contains(errOut, "absolute") {
+		t.Errorf("relative --db: code %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat("drivecat.db"); err == nil {
+		os.Remove("drivecat.db")
+		t.Error("relative --db created a database in the current folder")
+	}
+
+	t.Setenv("DRIVECAT_DB", `x\drivecat.db`)
+	if code, _, errOut := run(t, "sources"); code != 1 || !strings.Contains(errOut, "absolute") {
+		t.Errorf("relative DRIVECAT_DB: code %d, stderr %q", code, errOut)
+	}
+
+	t.Setenv("DRIVECAT_DB", "")
+	t.Setenv("LOCALAPPDATA", "")
+	if code, _, errOut := run(t, "sources"); code != 1 || !strings.Contains(errOut, "LOCALAPPDATA") {
+		t.Errorf("no LOCALAPPDATA: code %d, stderr %q", code, errOut)
+	}
+	// version needs no database, so it works regardless.
+	if code, out, _ := run(t, "version"); code != 0 || !strings.HasPrefix(out, "drivecat ") {
+		t.Errorf("version: code %d, out %q", code, out)
+	}
+}
+
+func TestDefaultDBPath(t *testing.T) {
+	t.Setenv("DRIVECAT_DB", "")
+	t.Setenv("LOCALAPPDATA", `C:\Users\someone\AppData\Local`)
+	got, err := resolveDBPath("")
+	if err != nil || got != `C:\Users\someone\AppData\Local\drivecat\drivecat.db` {
+		t.Fatalf("resolveDBPath = %q, %v", got, err)
+	}
+}
+
+func TestSourcesWithoutDatabase(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "drivecat.db")
+	code, out, _ := run(t, "--db", db, "sources")
+	if code != 0 || !strings.Contains(out, "No database") {
+		t.Fatalf("code %d, out %q", code, out)
+	}
+	if _, err := os.Stat(db); !os.IsNotExist(err) {
+		t.Fatal("sources created a database")
+	}
+}
+
+func TestInitRefusesForeignFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.txt")
+	content := []byte(strings.Repeat("my notes\n", 20))
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"init", "sources"} {
+		if code, _, errOut := run(t, "--db", path, cmd); code != 1 || !strings.Contains(errOut, "refusing") {
+			t.Errorf("%s: code %d, stderr %q", cmd, code, errOut)
+		}
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(content) {
+		t.Fatal("foreign file was modified")
 	}
 }
 

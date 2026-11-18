@@ -26,6 +26,7 @@ Commands:
   init              create the database, or bring its schema up to date
   sources           list the drives and shares scanned so far
   identify PATH     show how drivecat recognizes the drive or share behind PATH
+                    (--json for machine-readable output)
   scan PATH         scan PATH and record every file with its SHA-256
   report            show total versus unique files and bytes
   version           print the version
@@ -62,24 +63,18 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	e := &env{ctx: ctx, dbPath: *dbPath, stdout: stdout, stderr: stderr}
-	if e.dbPath == "" {
-		e.dbPath = defaultDBPath()
-	}
-
+	e := &env{ctx: ctx, stdout: stdout, stderr: stderr}
 	cmd, cmdArgs := rest[0], rest[1:]
 	var err error
-	switch cmd {
-	case "init":
-		err = e.runInit(cmdArgs)
-	case "sources":
-		err = e.runSources(cmdArgs)
-	case "version":
+	if cmd != "version" {
+		e.dbPath, err = resolveDBPath(*dbPath)
+	}
+	switch {
+	case err != nil:
+	case cmd == "version":
 		fmt.Fprintf(stdout, "drivecat %s\n", Version)
-	case "identify", "scan", "report":
-		err = fmt.Errorf("%s is not implemented yet", cmd)
 	default:
-		err = fmt.Errorf("%w: unknown command %q", errUsage, cmd)
+		err = e.dispatch(cmd, cmdArgs)
 	}
 
 	switch {
@@ -94,17 +89,42 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func defaultDBPath() string {
+func (e *env) dispatch(cmd string, args []string) error {
+	switch cmd {
+	case "init":
+		return e.runInit(args)
+	case "sources":
+		return e.runSources(args)
+	case "identify":
+		return e.runIdentify(args)
+	case "scan", "report":
+		return fmt.Errorf("%s is not implemented yet", cmd)
+	}
+	return fmt.Errorf("%w: unknown command %q", errUsage, cmd)
+}
+
+// resolveDBPath picks the database path: --db, else $DRIVECAT_DB, else
+// %LOCALAPPDATA%\drivecat\drivecat.db. It must be absolute: a relative path
+// would put the database wherever drivecat happens to run, possibly on a
+// drive being scanned.
+func resolveDBPath(flagValue string) (string, error) {
+	if flagValue != "" {
+		if !filepath.IsAbs(flagValue) {
+			return "", fmt.Errorf("%w: --db must be an absolute path, got %q", errUsage, flagValue)
+		}
+		return filepath.Clean(flagValue), nil
+	}
 	if p := os.Getenv("DRIVECAT_DB"); p != "" {
-		return p
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("DRIVECAT_DB must be an absolute path, got %q", p)
+		}
+		return filepath.Clean(p), nil
 	}
 	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			base = home
-		}
+	if !filepath.IsAbs(base) {
+		return "", errors.New("LOCALAPPDATA is not set to an absolute path: pass --db with an absolute path")
 	}
-	return filepath.Join(base, "drivecat", "drivecat.db")
+	return filepath.Join(base, "drivecat", "drivecat.db"), nil
 }
 
 func noArgs(cmd string, args []string) error {
@@ -114,15 +134,16 @@ func noArgs(cmd string, args []string) error {
 	return nil
 }
 
-func (e *env) open() (*store.Store, error) {
-	return store.Open(e.ctx, e.dbPath)
-}
-
 func (e *env) runInit(args []string) error {
 	if err := noArgs("init", args); err != nil {
 		return err
 	}
-	s, err := e.open()
+	// Create only where nothing exists; otherwise open, which verifies the
+	// file is a drivecat database before migrating it.
+	s, err := store.Open(e.ctx, e.dbPath)
+	if errors.Is(err, store.ErrNotFound) {
+		s, err = store.Create(e.ctx, e.dbPath)
+	}
 	if err != nil {
 		return err
 	}
@@ -139,7 +160,11 @@ func (e *env) runSources(args []string) error {
 	if err := noArgs("sources", args); err != nil {
 		return err
 	}
-	s, err := e.open()
+	s, err := store.OpenReadOnly(e.ctx, e.dbPath)
+	if errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintf(e.stdout, "No database at %s yet. Create it with: drivecat init\n", e.dbPath)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

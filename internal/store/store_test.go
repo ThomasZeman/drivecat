@@ -1,30 +1,39 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-func openTemp(t *testing.T) (*Store, string) {
+func createTemp(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "sub", "drivecat.db")
-	s, err := Open(context.Background(), path)
+	s, err := Create(context.Background(), path)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 	return s, path
 }
 
-func TestOpenCreatesSchema(t *testing.T) {
-	s, _ := openTemp(t)
+func TestCreateSchema(t *testing.T) {
+	s, _ := createTemp(t)
 	ctx := context.Background()
 
 	v, err := s.SchemaVersion(ctx)
 	if err != nil || v != len(migrations) {
 		t.Fatalf("schema version = %d, %v; want %d", v, err, len(migrations))
+	}
+	var appID int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&appID); err != nil || appID != ApplicationID {
+		t.Fatalf("application_id = %#x, %v", appID, err)
 	}
 	for _, table := range []string{"sources", "scans", "files"} {
 		var n int
@@ -36,13 +45,22 @@ func TestOpenCreatesSchema(t *testing.T) {
 	}
 }
 
-func TestOpenIsIdempotent(t *testing.T) {
-	s, path := openTemp(t)
+func TestCreateRefusesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.db")
+	writeFile(t, path, "")
+	if s, err := Create(context.Background(), path); err == nil {
+		s.Close()
+		t.Fatal("Create took over an existing file")
+	}
+}
+
+func TestReopen(t *testing.T) {
+	s, path := createTemp(t)
 	s.Close()
 
 	s2, err := Open(context.Background(), path)
 	if err != nil {
-		t.Fatalf("second Open: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	defer s2.Close()
 	if v, _ := s2.SchemaVersion(context.Background()); v != len(migrations) {
@@ -50,11 +68,112 @@ func TestOpenIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRejectsNewerSchema(t *testing.T) {
-	s, path := openTemp(t)
-	if _, err := s.db.Exec("PRAGMA user_version = 999"); err != nil {
+func TestOpenRefusesMissingWithoutCreating(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.db")
+	for name, open := range map[string]func(context.Context, string) (*Store, error){
+		"Open": Open, "OpenReadOnly": OpenReadOnly,
+	} {
+		if _, err := open(context.Background(), path); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: err = %v, want ErrNotFound", name, err)
+		}
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s created the file", name)
+		}
+	}
+}
+
+func TestOpenRefusesForeignFilesUntouched(t *testing.T) {
+	dir := t.TempDir()
+
+	empty := filepath.Join(dir, "empty.db")
+	writeFile(t, empty, "")
+
+	text := filepath.Join(dir, "notes.txt")
+	writeFile(t, text, strings.Repeat("not a database\n", 20))
+
+	// A real SQLite database that is not drivecat's, like a Lightroom catalog.
+	foreign := filepath.Join(dir, "catalog.lrcat")
+	db, err := sql.Open("sqlite", foreign)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec("CREATE TABLE photos (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	for _, path := range []string{empty, text, foreign} {
+		before := readFile(t, path)
+		for name, open := range map[string]func(context.Context, string) (*Store, error){
+			"Open": Open, "OpenReadOnly": OpenReadOnly,
+		} {
+			if s, err := open(context.Background(), path); err == nil {
+				s.Close()
+				t.Errorf("%s accepted %s", name, filepath.Base(path))
+			}
+		}
+		if !bytes.Equal(before, readFile(t, path)) {
+			t.Errorf("%s was modified", filepath.Base(path))
+		}
+		for _, side := range []string{"-wal", "-shm", "-journal"} {
+			if _, err := os.Lstat(path + side); err == nil {
+				t.Errorf("%s%s was created", filepath.Base(path), side)
+			}
+		}
+	}
+}
+
+func TestRelativePathRefused(t *testing.T) {
+	ctx := context.Background()
+	if s, err := Create(ctx, "rel.db"); err == nil {
+		s.Close()
+		os.Remove("rel.db")
+		t.Error("Create accepted a relative path")
+	}
+	if _, err := Open(ctx, "rel.db"); err == nil {
+		t.Error("Open accepted a relative path")
+	}
+	if _, err := OpenReadOnly(ctx, `C:rel.db`); err == nil {
+		t.Error("OpenReadOnly accepted a drive-relative path")
+	}
+}
+
+func TestReadOnlyRefusesWrites(t *testing.T) {
+	s, path := createTemp(t)
+	s.Close()
+	before := readFile(t, path)
+
+	ro, err := OpenReadOnly(context.Background(), path)
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	now := Timestamp(time.Now())
+	if _, err := ro.db.Exec(`INSERT INTO sources (kind, fingerprint, label, first_seen, last_seen)
+		VALUES ('disk', 'fp', 'x', ?, ?)`, now, now); err == nil {
+		t.Error("insert through a read-only store succeeded")
+	}
+	if _, err := ro.ListSources(context.Background()); err != nil {
+		t.Errorf("read through a read-only store failed: %v", err)
+	}
+	ro.Close()
+	if !bytes.Equal(before, readFile(t, path)) {
+		t.Error("read-only open modified the database file")
+	}
+}
+
+func TestReadOnlyRefusesOldSchema(t *testing.T) {
+	s, path := createTemp(t)
+	mustExec(t, s, "PRAGMA user_version = 0")
+	s.Close()
+	if ro, err := OpenReadOnly(context.Background(), path); err == nil {
+		ro.Close()
+		t.Fatal("OpenReadOnly accepted an outdated schema")
+	}
+}
+
+func TestRejectsNewerSchema(t *testing.T) {
+	s, path := createTemp(t)
+	mustExec(t, s, "PRAGMA user_version = 999")
 	s.Close()
 
 	if s2, err := Open(context.Background(), path); err == nil {
@@ -64,7 +183,7 @@ func TestRejectsNewerSchema(t *testing.T) {
 }
 
 func TestForeignKeysEnforced(t *testing.T) {
-	s, _ := openTemp(t)
+	s, _ := createTemp(t)
 	now := Timestamp(time.Now())
 	_, err := s.db.Exec(`INSERT INTO files (source_id, rel_path, size, mtime, scan_id, seen_at)
 		VALUES (42, 'a.txt', 1, ?, 42, ?)`, now, now)
@@ -74,7 +193,7 @@ func TestForeignKeysEnforced(t *testing.T) {
 }
 
 func TestListSources(t *testing.T) {
-	s, _ := openTemp(t)
+	s, _ := createTemp(t)
 	ctx := context.Background()
 
 	got, err := s.ListSources(ctx)
@@ -103,9 +222,41 @@ func TestListSources(t *testing.T) {
 	}
 }
 
+func TestFindSource(t *testing.T) {
+	s, _ := createTemp(t)
+	ctx := context.Background()
+
+	if _, _, found, err := s.FindSource(ctx, "disk:x"); err != nil || found {
+		t.Fatalf("empty db: found %v, err %v", found, err)
+	}
+	now := Timestamp(time.Now())
+	mustExec(t, s, `INSERT INTO sources (kind, fingerprint, label, first_seen, last_seen)
+		VALUES ('disk', 'disk:x', 'WD 2TB black', ?, ?)`, now, now)
+	id, label, found, err := s.FindSource(ctx, "disk:x")
+	if err != nil || !found || id == 0 || label != "WD 2TB black" {
+		t.Fatalf("got %d %q %v %v", id, label, found, err)
+	}
+}
+
 func mustExec(t *testing.T, s *Store, q string, args ...any) {
 	t.Helper()
 	if _, err := s.db.Exec(q, args...); err != nil {
 		t.Fatalf("%s: %v", q, err)
 	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

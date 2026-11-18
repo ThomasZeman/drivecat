@@ -1,0 +1,28 @@
+// Package readonly opens files on sources: the drives and shares drivecat
+// identifies and scans. It is the only way drivecat reads a source file's
+// content, and it opens files so that drivecat cannot change them:
+//
+//   - read access only, and no access that allows writing, deleting or
+//     changing attributes or timestamps;
+//   - the file must already exist; nothing is ever created;
+//   - full sharing, so other programs can still write, rename or delete the
+//     file while drivecat reads it;
+//   - links (reparse points) are not followed, and offline or cloud files
+//     are refused instead of being downloaded or recalled.
+//
+// Reading a file's content can still update its last-access time; avoiding
+// that would need write access to the file, which is itself a change.
+package readonly
+
+import "errors"
+
+// ErrNotLocal means the file's content is not on the drive (an offline,
+// tiered or cloud-only file); reading it would download or recall it.
+var ErrNotLocal = errors.New("file content is not local (offline or cloud file); not read to avoid a recall")
+
+// ErrReparsePoint means the path is a link, junction or other reparse
+// point, which drivecat does not follow.
+var ErrReparsePoint = errors.New("reparse point (link or junction); not followed")
+
+// ErrNotFile means the path is a directory or device, not a file.
+var ErrNotFile = errors.New("not a regular file")

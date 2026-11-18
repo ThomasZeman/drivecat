@@ -1,0 +1,5 @@
+/drivecat.exe
+/bin/
+*.db
+*.db-wal
+*.db-shm

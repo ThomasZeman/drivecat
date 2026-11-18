@@ -1,0 +1,177 @@
+// Package cli parses the command line and runs drivecat's commands.
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"text/tabwriter"
+
+	"github.com/ThomasZeman/drivecat/internal/store"
+)
+
+// Version is set at build time with -ldflags "-X github.com/ThomasZeman/drivecat/internal/cli.Version=...".
+var Version = "dev"
+
+const usage = `drivecat builds a catalogue of every file on your drives and shares.
+
+Usage:
+  drivecat [--db PATH] <command> [arguments]
+
+Commands:
+  init              create the database, or bring its schema up to date
+  sources           list the drives and shares scanned so far
+  identify PATH     show how drivecat recognizes the drive or share behind PATH
+  scan PATH         scan PATH and record every file with its SHA-256
+  report            show total versus unique files and bytes
+  version           print the version
+
+Global flags:
+  --db PATH         database file (default: $DRIVECAT_DB, else %LOCALAPPDATA%\drivecat\drivecat.db)
+`
+
+// errUsage marks errors caused by a bad command line (exit code 2).
+var errUsage = errors.New("usage error")
+
+type env struct {
+	ctx    context.Context
+	dbPath string
+	stdout io.Writer
+	stderr io.Writer
+}
+
+// Run executes drivecat with args (without the program name) and returns
+// the process exit code.
+func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	global := flag.NewFlagSet("drivecat", flag.ContinueOnError)
+	global.SetOutput(io.Discard)
+	dbPath := global.String("db", "", "")
+	help := global.Bool("help", false, "")
+	global.BoolVar(help, "h", false, "")
+	if err := global.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "drivecat: %v\n\n%s", err, usage)
+		return 2
+	}
+	rest := global.Args()
+	if *help || len(rest) == 0 || rest[0] == "help" {
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
+
+	e := &env{ctx: ctx, dbPath: *dbPath, stdout: stdout, stderr: stderr}
+	if e.dbPath == "" {
+		e.dbPath = defaultDBPath()
+	}
+
+	cmd, cmdArgs := rest[0], rest[1:]
+	var err error
+	switch cmd {
+	case "init":
+		err = e.runInit(cmdArgs)
+	case "sources":
+		err = e.runSources(cmdArgs)
+	case "version":
+		fmt.Fprintf(stdout, "drivecat %s\n", Version)
+	case "identify", "scan", "report":
+		err = fmt.Errorf("%s is not implemented yet", cmd)
+	default:
+		err = fmt.Errorf("%w: unknown command %q", errUsage, cmd)
+	}
+
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, errUsage):
+		fmt.Fprintf(stderr, "drivecat: %v\n\n%s", err, usage)
+		return 2
+	default:
+		fmt.Fprintf(stderr, "drivecat: %v\n", err)
+		return 1
+	}
+}
+
+func defaultDBPath() string {
+	if p := os.Getenv("DRIVECAT_DB"); p != "" {
+		return p
+	}
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = home
+		}
+	}
+	return filepath.Join(base, "drivecat", "drivecat.db")
+}
+
+func noArgs(cmd string, args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("%w: %s takes no arguments", errUsage, cmd)
+	}
+	return nil
+}
+
+func (e *env) open() (*store.Store, error) {
+	return store.Open(e.ctx, e.dbPath)
+}
+
+func (e *env) runInit(args []string) error {
+	if err := noArgs("init", args); err != nil {
+		return err
+	}
+	s, err := e.open()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	v, err := s.SchemaVersion(e.ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(e.stdout, "Database %s is ready (schema version %d).\n", e.dbPath, v)
+	return nil
+}
+
+func (e *env) runSources(args []string) error {
+	if err := noArgs("sources", args); err != nil {
+		return err
+	}
+	s, err := e.open()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	rows, err := s.ListSources(e.ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(e.stdout, "No sources yet. Scan one with: drivecat scan PATH --label NAME")
+		return nil
+	}
+	tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tLABEL\tKIND\tBUS\tFS\tFILES\tSIZE\tLAST SEEN")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+			r.ID, r.Label, r.Kind, r.BusType, r.FSType, r.Files, formatBytes(r.Bytes), r.LastSeen)
+	}
+	return tw.Flush()
+}
+
+// formatBytes renders n in binary units (KiB, MiB, ...), matching what
+// Windows Explorer shows for drive sizes.
+func formatBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}

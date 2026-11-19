@@ -22,13 +22,47 @@ drivecat init
 drivecat sources
 drivecat identify E:\
 drivecat identify \\nas\photos --json
+drivecat scan E:\ --label "WD 2TB black"
+drivecat scan \\nas\photos --label "NAS photos"
+drivecat identify \\nas
+drivecat scan \\nas --label NAS
 ```
+
+Given only a server (`\\nas` or `\\192.168.1.20`), `identify` lists its shares and `scan` scans each one as its own
+source, named after the `--label` prefix and the share (`NAS photos`, `NAS backup`). Admin shares (`C$`, `ADMIN$`),
+`IPC$`, printers and other hidden shares ending in `$` are left out; a hidden share can still be scanned by its full
+path. A share is recognized by server and share name, so always use the same name for the server: `\\nas` and
+`\\192.168.1.20` count as different sources.
 
 The database defaults to `%LOCALAPPDATA%\drivecat\drivecat.db`; override it with `--db PATH` or `DRIVECAT_DB`,
 which must be an absolute path on a drive letter (not a UNC path). Only `init` creates a database, and only in a
 folder that already exists; the default `drivecat` folder is the one folder it creates itself. `sources` and
 `identify` open the database read-only.
-`scan` and `report` are planned and not implemented yet.
+`report` is planned and not implemented yet.
+
+### Scanning
+
+`scan PATH` records every file below PATH with its relative path, size, modification time and SHA-256. A drive
+or share seen for the first time needs a name with `--label`; later scans recognize it and keep the name (or
+rename it, if `--label` is given again).
+
+- A file that cannot be read is stored with its error and no checksum, and the scan carries on. So are links and
+  offline or cloud-only files, which are recorded but never read.
+- Folders that are links or junctions are not entered. Nor are `$RECYCLE.BIN`, `System Volume Information`, NAS
+  snapshot and recycle folders (`#snapshot`, `#recycle`, `@Recycle`, `@Recently-Snapshot`, `.snapshot`,
+  `~snapshot`), and, in the root of a drive only, the old `RECYCLER` and `RECYCLED` bins. Folders that cannot be
+  listed are reported as warnings.
+- Paths are stored `/`-separated and in Unicode NFC, so names written by a Mac match. If a folder holds the same
+  name in both forms, the second keeps its original form instead of overwriting the first.
+- Spinning disks, and disks that do not say, are read one file at a time; SSDs and shares with 4 parallel readers.
+  `--workers N` overrides it.
+- A file whose size and modification time match the last scan keeps its checksum without being read again, so
+  scanning a drive again only reads what changed. `--rehash` reads everything. This also resumes an interrupted
+  scan: Ctrl+C stores what was read so far and marks the scan aborted.
+- A file that changes while it is read is stored with an error instead of a checksum that matches no version of
+  it.
+- The scan refuses to run if the database is inside the folder being scanned, and warns if it is on the same
+  drive.
 
 ## Read-only towards your drives
 
@@ -38,7 +72,10 @@ own database. The safeguards so far:
 - Source files are opened through `internal/readonly`: read access only, an existing file only, and sharing for
   read, write and delete. A handle is still held while a file is read, so a program that wants exclusive access, or
   renames a parent folder, has to wait until drivecat moves on. A link in the last part of the path is not followed,
-  and offline or cloud-only files are skipped instead of recalled. Links in parent folders are not detected yet.
+  and offline or cloud-only files are skipped instead of recalled.
+- Folders are listed through `internal/readonly` with the same read-only access. A folder that is itself a link is
+  refused, so a scan never follows a link, including at the folder it starts from. A link that someone creates in
+  place of a folder while the scan runs is not detected; it would make drivecat read elsewhere, never write.
 - Drive queries go through an allowlist of five read-only IOCTLs, and the one that takes input only accepts the two
   standard queries drivecat builds itself. A test decodes each code from its number.
 - `identify` refuses device paths (`COM3`, `NUL`, `\\.\PhysicalDrive0`, `\\?\GLOBALROOT\...`) before anything opens

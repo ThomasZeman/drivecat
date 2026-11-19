@@ -47,13 +47,20 @@ const module = "github.com/ThomasZeman/drivecat"
 var allowedImports = map[string][]string{
 	"cmd/drivecat": {"context", "os", "os/signal", module + "/internal/cli"},
 	"internal/cli": {"context", "encoding/json", "errors", "flag", "fmt", "io", "os", "path/filepath",
-		"strings", "text/tabwriter", module + "/internal/store", module + "/internal/volume"},
-	"internal/readonly": {"errors", "golang.org/x/sys/windows", "os", "strings"},
+		"strconv", "strings", "sync", "text/tabwriter", "time", module + "/internal/scan",
+		module + "/internal/store", module + "/internal/volume"},
+	"internal/readonly": {"encoding/binary", "errors", "fmt", "golang.org/x/sys/windows", "os", "strings", "sync",
+		"time", "unicode/utf16"},
+	// scan reads sources only through internal/readonly and writes only
+	// through internal/store.
+	"internal/scan": {"context", "crypto/sha256", "errors", "fmt", "io", "io/fs", "strings", "sync",
+		"sync/atomic", "time", "golang.org/x/text/unicode/norm", module + "/internal/readonly",
+		module + "/internal/store", module + "/internal/volume"},
 	"internal/store": {"bytes", "context", "database/sql", "database/sql/driver", "encoding/binary",
 		"errors", "fmt", "io", "io/fs", "modernc.org/sqlite", "net/url", "os", "path/filepath", "strings",
 		"time", module + "/internal/readonly"},
 	"internal/volume": {"encoding/binary", "errors", "fmt", "golang.org/x/sys/windows", "io", "os",
-		"path/filepath", "strings", "unsafe", module + "/internal/readonly"},
+		"path/filepath", "sort", "strings", "unsafe", module + "/internal/readonly"},
 }
 
 // sensitivePackages are the packages whose functions, constants and
@@ -79,6 +86,11 @@ var allowedUses = map[string][]string{
 		"golang.org/x/sys/windows.FILE_SHARE_DELETE",
 		"golang.org/x/sys/windows.FILE_FLAG_OPEN_NO_RECALL", "golang.org/x/sys/windows.FILE_FLAG_OPEN_REPARSE_POINT",
 		"golang.org/x/sys/windows.FILE_FLAG_SEQUENTIAL_SCAN",
+		// opening an existing directory with the same read access, to list it
+		"golang.org/x/sys/windows.FILE_FLAG_BACKUP_SEMANTICS",
+		"golang.org/x/sys/windows.GetFileInformationByHandleEx",
+		"golang.org/x/sys/windows.FileFullDirectoryInfo", "golang.org/x/sys/windows.FileFullDirectoryRestartInfo",
+		"golang.org/x/sys/windows.ERROR_NO_MORE_FILES", "golang.org/x/sys/windows.ERROR_FILE_NOT_FOUND",
 		// reading attributes
 		"golang.org/x/sys/windows.GetFileAttributes", "golang.org/x/sys/windows.GetFileInformationByHandle",
 		"golang.org/x/sys/windows.FILE_ATTRIBUTE_OFFLINE", "golang.org/x/sys/windows.FILE_ATTRIBUTE_RECALL_ON_OPEN",
@@ -87,6 +99,11 @@ var allowedUses = map[string][]string{
 		"golang.org/x/sys/windows.FILE_ATTRIBUTE_DEVICE",
 		"golang.org/x/sys/windows.UTF16PtrFromString", "golang.org/x/sys/windows.CloseHandle",
 		"os.NewFile",
+	},
+	"internal/scan": {
+		// files opened by internal/readonly: compare size and time before and
+		// after reading, and close them
+		"(*os.File).Close", "(*os.File).Stat",
 	},
 	"internal/store": {
 		// The database: create a new file only (checked below), make the
@@ -110,9 +127,12 @@ var allowedUses = map[string][]string{
 		"golang.org/x/sys/windows.GetVolumePathName", "golang.org/x/sys/windows.GetVolumeNameForVolumeMountPoint",
 		"golang.org/x/sys/windows.GetVolumeInformation", "golang.org/x/sys/windows.GetFileInformationByHandleEx",
 		"golang.org/x/sys/windows.MAX_LONG_PATH", "golang.org/x/sys/windows.MAX_PATH",
-		// the one DLL function: resolving a mapped drive letter
+		// the two DLL functions: resolving a mapped drive letter (mpr.dll
+		// WNetGetConnectionW) and reading a server's share list (netapi32.dll
+		// NetShareEnum, freed with NetApiBufferFree)
 		"golang.org/x/sys/windows.NewLazySystemDLL", "(*golang.org/x/sys/windows.LazyDLL).NewProc",
-		"(*golang.org/x/sys/windows.LazyProc).Call",
+		"(*golang.org/x/sys/windows.LazyProc).Call", "golang.org/x/sys/windows.NetApiBufferFree",
+		"golang.org/x/sys/windows.UTF16PtrFromString", "golang.org/x/sys/windows.UTF16PtrToString",
 		"golang.org/x/sys/windows.StringToUTF16Ptr", "golang.org/x/sys/windows.UTF16ToString",
 		"os.Stat", "(*os.File).Close",
 	},
@@ -127,8 +147,8 @@ var (
 	readAccessMask  = uint64(0x80000000 | 0x1 | 0x8 | 0x80 | 0x20000 | 0x100000)
 	openExisting    = uint64(3)
 	deleteOnClose   = uint64(0x04000000)
-	allowedDLLs     = []string{"mpr.dll"}
-	allowedDLLProcs = []string{"WNetGetConnectionW"}
+	allowedDLLs     = []string{"mpr.dll", "netapi32.dll"}
+	allowedDLLProcs = []string{"WNetGetConnectionW", "NetShareEnum"}
 	ioctlFunc       = "internal/volume.ioctl"
 )
 

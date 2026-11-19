@@ -67,12 +67,9 @@ func TestUsageErrors(t *testing.T) {
 }
 
 func TestNotImplementedYet(t *testing.T) {
-	// A temp folder, never a real drive: once scan exists, this test must
-	// not scan whatever happens to be E: on the machine running it.
-	dir := t.TempDir()
-	db := filepath.Join(dir, "drivecat.db")
-	if code, _, errOut := run(t, "--db", db, "scan", dir); code != 1 || !strings.Contains(errOut, "not implemented") {
-		t.Errorf("scan: code %d, stderr %q", code, errOut)
+	db := filepath.Join(t.TempDir(), "drivecat.db")
+	if code, _, errOut := run(t, "--db", db, "report"); code != 1 || !strings.Contains(errOut, "not implemented") {
+		t.Errorf("report: code %d, stderr %q", code, errOut)
 	}
 }
 

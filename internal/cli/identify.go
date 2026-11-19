@@ -13,8 +13,11 @@ import (
 	"github.com/ThomasZeman/drivecat/internal/volume"
 )
 
-// identifyFunc is volume.Identify, replaceable in tests.
-var identifyFunc = volume.Identify
+// identifyFunc and listSharesFunc are replaceable in tests.
+var (
+	identifyFunc   = volume.Identify
+	listSharesFunc = volume.ListShares
+)
 
 type identifyResult struct {
 	*volume.Identity
@@ -32,6 +35,10 @@ func (e *env) runIdentify(args []string) error {
 	}
 	if len(pos) != 1 {
 		return fmt.Errorf("%w: identify takes exactly one PATH", errUsage)
+	}
+
+	if server, ok := volume.ServerOnly(pos[0]); ok {
+		return e.identifyServer(server, *asJSON)
 	}
 
 	id, err := identifyFunc(pos[0])
@@ -150,4 +157,72 @@ func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 		pos = append(pos, args[0])
 		args = args[1:]
 	}
+}
+
+// shareResult is one share in identify's output for a server.
+type shareResult struct {
+	volume.Share
+	Fingerprint      string `json:"fingerprint"`
+	KnownSourceID    int64  `json:"known_source_id,omitempty"`
+	KnownSourceLabel string `json:"known_source_label,omitempty"`
+}
+
+// identifyServer lists the shares a scan of the whole server would cover.
+func (e *env) identifyServer(server string, asJSON bool) error {
+	shares, err := listSharesFunc(server)
+	if err != nil {
+		return err
+	}
+	var s *store.Store
+	switch st, err := store.OpenReadOnly(e.ctx, e.dbPath); {
+	case errors.Is(err, store.ErrNotFound):
+	case err != nil:
+		return err
+	default:
+		s = st
+		defer s.Close()
+	}
+
+	res := make([]shareResult, 0, len(shares))
+	for _, sh := range shares {
+		r := shareResult{Share: sh}
+		if id, err := identifyFunc(sh.Path); err == nil {
+			r.Fingerprint = id.Fingerprint
+		}
+		if s != nil && r.Fingerprint != "" {
+			id, label, found, err := s.FindSource(e.ctx, r.Fingerprint)
+			if err != nil {
+				return err
+			}
+			if found {
+				r.KnownSourceID, r.KnownSourceLabel = id, label
+			}
+		}
+		res = append(res, r)
+	}
+
+	if asJSON {
+		enc := json.NewEncoder(e.stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(res)
+	}
+	if len(res) == 0 {
+		fmt.Fprintf(e.stdout, "\\\\%s offers no shares that drivecat can scan.\n", server)
+		return nil
+	}
+	fmt.Fprintf(e.stdout, "\\\\%s shares %d folders; drivecat scan \\\\%s scans each as its own source.\n\n",
+		server, len(res), server)
+	tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SHARE\tKNOWN AS\tREMARK")
+	for _, r := range res {
+		known := "new"
+		switch {
+		case r.Fingerprint == "":
+			known = "cannot open"
+		case r.KnownSourceID != 0:
+			known = fmt.Sprintf("%s (source %d)", r.KnownSourceLabel, r.KnownSourceID)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Path, known, r.Remark)
+	}
+	return tw.Flush()
 }

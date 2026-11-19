@@ -28,6 +28,9 @@ Commands:
   identify PATH     show how drivecat recognizes the drive or share behind PATH
                     (--json for machine-readable output)
   scan PATH         scan PATH and record every file with its SHA-256
+                    (--label NAME for a new drive or share, --workers N,
+                    --rehash to read unchanged files again,
+                    -v / --verbose to print every file with its SHA-256)
   report            show total versus unique files and bytes
   version           print the version
 
@@ -100,7 +103,9 @@ func (e *env) dispatch(cmd string, args []string) error {
 		return e.runSources(args)
 	case "identify":
 		return e.runIdentify(args)
-	case "scan", "report":
+	case "scan":
+		return e.runScan(args)
+	case "report":
 		return fmt.Errorf("%s is not implemented yet", cmd)
 	}
 	return fmt.Errorf("%w: unknown command %q", errUsage, cmd)

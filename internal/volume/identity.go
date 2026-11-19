@@ -250,8 +250,10 @@ func parseDeviceDescriptor(b []byte) (deviceDescriptor, error) {
 		Removable: b[10] != 0,
 		Vendor:    str(12),
 		Product:   str(16),
-		Serial:    str(24),
-		BusType:   busTypeName(binary.LittleEndian.Uint32(b[28:32])),
+		// Windows ends NVMe serials with a dot (0025_38DC_21A6_AF8B.); it is
+		// not part of the drive's serial.
+		Serial:  strings.TrimRight(str(24), ". "),
+		BusType: busTypeName(binary.LittleEndian.Uint32(b[28:32])),
 	}, nil
 }
 

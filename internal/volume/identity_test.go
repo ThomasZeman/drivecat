@@ -169,6 +169,14 @@ func TestParseDeviceDescriptor(t *testing.T) {
 	if diskModel(d) != "" {
 		t.Fatalf("empty model expected")
 	}
+
+	// NVMe serials as Windows formats them lose the trailing dot.
+	b = make([]byte, 100)
+	binary.LittleEndian.PutUint32(b[24:], 40)
+	copy(b[40:], "0025_38DC_21A6_AF8B.\x00")
+	if d, err = parseDeviceDescriptor(b); err != nil || d.Serial != "0025_38DC_21A6_AF8B" {
+		t.Fatalf("NVMe serial %q, %v", d.Serial, err)
+	}
 }
 
 func TestBusTypeName(t *testing.T) {

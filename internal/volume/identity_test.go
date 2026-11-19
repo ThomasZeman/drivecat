@@ -176,3 +176,23 @@ func TestBusTypeName(t *testing.T) {
 		t.Fatal("bus type names wrong")
 	}
 }
+
+func TestCheckSourcePath(t *testing.T) {
+	for _, p := range []string{
+		`E:\`, `E:\Photos\2004`, `\\nas\photos`, `\\?\E:\Photos`, `\\?\UNC\nas\photos`,
+		`relative\folder`, `E:\console.log`, `E:\COMPANY`, `E:\com10`, `E:\nullable`,
+	} {
+		if err := CheckSourcePath(p); err != nil {
+			t.Errorf("CheckSourcePath(%q) = %v, want nil", p, err)
+		}
+	}
+	for _, p := range []string{
+		`COM3`, `com3`, `NUL`, `nul.txt`, `E:\Photos\AUX`, `E:\lpt1 `, `E:\COM¹`, `CONOUT$`,
+		`\\.\PhysicalDrive0`, `\\.\C:`, `//./COM1`, `\\?\GLOBALROOT\Device\Harddisk0`,
+		`\\?\Volume{00000000-0000-0000-0000-000000000000}\`, `\??\C:\`,
+	} {
+		if err := CheckSourcePath(p); !errors.Is(err, ErrDevicePath) {
+			t.Errorf("CheckSourcePath(%q) = %v, want ErrDevicePath", p, err)
+		}
+	}
+}

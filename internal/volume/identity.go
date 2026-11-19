@@ -273,3 +273,57 @@ func busTypeName(t uint32) string {
 func diskModel(d deviceDescriptor) string {
 	return strings.TrimSpace(strings.TrimSpace(d.Vendor) + " " + strings.TrimSpace(d.Product))
 }
+
+// ErrDevicePath means a path names a device (a COM port, a raw disk, the
+// NT object namespace) instead of a place in a file system.
+var ErrDevicePath = errors.New("not a file system path: drivecat does not open devices given as a path")
+
+// CheckSourcePath refuses paths that would make Windows open a device
+// rather than a folder: the \\.\ namespace, \\?\ paths other than
+// \\?\C:\... and \\?\UNC\..., and reserved device names like COM3 or NUL in
+// any part of the path. Opening a device, even just to look at it, can have
+// side effects (a serial port raises its control lines), so this runs
+// before anything touches the path.
+func CheckSourcePath(p string) error {
+	q := strings.ReplaceAll(p, "/", `\`)
+	switch {
+	case strings.HasPrefix(q, `\\.\`), strings.HasPrefix(q, `\??\`):
+		return fmt.Errorf("%s: %w", p, ErrDevicePath)
+	case strings.HasPrefix(q, `\\?\`):
+		r := q[len(`\\?\`):]
+		isDrive := len(r) >= 3 && isLetter(r[0]) && r[1] == ':' && r[2] == '\\'
+		if !isDrive && !hasPrefixFold(r, `UNC\`) {
+			return fmt.Errorf("%s: %w", p, ErrDevicePath)
+		}
+	}
+	for _, part := range strings.Split(q, `\`) {
+		if isReservedName(part) {
+			return fmt.Errorf("%s: %s is a device name: %w", p, part, ErrDevicePath)
+		}
+	}
+	return nil
+}
+
+func isLetter(c byte) bool { return 'a' <= c|0x20 && c|0x20 <= 'z' }
+
+// isReservedName reports whether a path component is one of the DOS device
+// names. Windows ignores an extension and trailing dots and spaces when it
+// matches them ("nul.txt" and "COM1 " are devices too), so this does as well.
+func isReservedName(part string) bool {
+	base := part
+	if i := strings.IndexByte(base, '.'); i >= 0 {
+		base = base[:i]
+	}
+	base = strings.ToUpper(strings.TrimRight(base, " "))
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$":
+		return true
+	}
+	if len(base) >= 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
+		switch base[3:] {
+		case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³":
+			return true
+		}
+	}
+	return false
+}

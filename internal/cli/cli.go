@@ -41,8 +41,11 @@ var errUsage = errors.New("usage error")
 type env struct {
 	ctx    context.Context
 	dbPath string
-	stdout io.Writer
-	stderr io.Writer
+	// defaultDB is set when dbPath is the default location, whose folder
+	// init may create.
+	defaultDB bool
+	stdout    io.Writer
+	stderr    io.Writer
 }
 
 // Run executes drivecat with args (without the program name) and returns
@@ -67,7 +70,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cmd, cmdArgs := rest[0], rest[1:]
 	var err error
 	if cmd != "version" {
-		e.dbPath, err = resolveDBPath(*dbPath)
+		e.dbPath, e.defaultDB, err = resolveDBPath(*dbPath)
 	}
 	switch {
 	case err != nil:
@@ -107,24 +110,24 @@ func (e *env) dispatch(cmd string, args []string) error {
 // %LOCALAPPDATA%\drivecat\drivecat.db. It must be absolute: a relative path
 // would put the database wherever drivecat happens to run, possibly on a
 // drive being scanned.
-func resolveDBPath(flagValue string) (string, error) {
+func resolveDBPath(flagValue string) (path string, isDefault bool, err error) {
 	if flagValue != "" {
 		if !filepath.IsAbs(flagValue) {
-			return "", fmt.Errorf("%w: --db must be an absolute path, got %q", errUsage, flagValue)
+			return "", false, fmt.Errorf("%w: --db must be an absolute path, got %q", errUsage, flagValue)
 		}
-		return filepath.Clean(flagValue), nil
+		return filepath.Clean(flagValue), false, nil
 	}
 	if p := os.Getenv("DRIVECAT_DB"); p != "" {
 		if !filepath.IsAbs(p) {
-			return "", fmt.Errorf("DRIVECAT_DB must be an absolute path, got %q", p)
+			return "", false, fmt.Errorf("DRIVECAT_DB must be an absolute path, got %q", p)
 		}
-		return filepath.Clean(p), nil
+		return filepath.Clean(p), false, nil
 	}
 	base := os.Getenv("LOCALAPPDATA")
 	if !filepath.IsAbs(base) {
-		return "", errors.New("LOCALAPPDATA is not set to an absolute path: pass --db with an absolute path")
+		return "", false, errors.New("LOCALAPPDATA is not set to an absolute path: pass --db with an absolute path")
 	}
-	return filepath.Join(base, "drivecat", "drivecat.db"), nil
+	return filepath.Join(base, "drivecat", "drivecat.db"), true, nil
 }
 
 func noArgs(cmd string, args []string) error {
@@ -142,7 +145,9 @@ func (e *env) runInit(args []string) error {
 	// file is a drivecat database before migrating it.
 	s, err := store.Open(e.ctx, e.dbPath)
 	if errors.Is(err, store.ErrNotFound) {
-		s, err = store.Create(e.ctx, e.dbPath)
+		// Only the default folder is created; for --db and DRIVECAT_DB the
+		// folder must exist, so a typo cannot create folders on a drive.
+		s, err = store.Create(e.ctx, e.dbPath, e.defaultDB)
 	}
 	if err != nil {
 		return err

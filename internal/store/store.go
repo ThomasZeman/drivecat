@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	_ "modernc.org/sqlite" // registers the "sqlite" driver
 )
 
 // Store is an open drivecat database.

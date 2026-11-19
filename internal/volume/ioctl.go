@@ -1,6 +1,9 @@
 package volume
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // IOCTL codes, CTL_CODE(device, function, METHOD_BUFFERED, FILE_ANY_ACCESS).
 // FILE_ANY_ACCESS lets them work on a handle opened without read access,
@@ -48,14 +51,46 @@ var allowedIoctls = map[uint32]string{
 	ioctlDiskGetDriveGeometryEx: "IOCTL_DISK_GET_DRIVE_GEOMETRY_EX",
 }
 
-// checkIoctl refuses any code that is not an allowed read-only query.
-func checkIoctl(code uint32) error {
+// Storage properties drivecat may query with IOCTL_STORAGE_QUERY_PROPERTY,
+// and the query type: PropertyStandardQuery returns the descriptor.
+const (
+	storageDeviceProperty        = 0 // STORAGE_DEVICE_DESCRIPTOR
+	storageDeviceSeekPenaltyProp = 7 // DEVICE_SEEK_PENALTY_DESCRIPTOR
+	propertyStandardQuery        = 0
+)
+
+var allowedProperties = map[uint32]bool{storageDeviceProperty: true, storageDeviceSeekPenaltyProp: true}
+
+// propertyQuery builds a STORAGE_PROPERTY_QUERY: PropertyId, QueryType,
+// AdditionalParameters[1].
+func propertyQuery(propertyID uint32) []byte {
+	q := make([]byte, 12)
+	binary.LittleEndian.PutUint32(q[0:4], propertyID)
+	binary.LittleEndian.PutUint32(q[4:8], propertyStandardQuery)
+	return q
+}
+
+// checkIoctl refuses any code that is not an allowed read-only query, and
+// any input that is not one drivecat builds itself: the other codes take no
+// input, and IOCTL_STORAGE_QUERY_PROPERTY only the two standard queries
+// above.
+func checkIoctl(code uint32, in []byte) error {
 	if decodeCtlCode(code).Access != fileAnyAccess {
 		return fmt.Errorf("refusing IOCTL %#x: it requires handle access (%d); drivecat only sends queries",
 			code, decodeCtlCode(code).Access)
 	}
 	if _, ok := allowedIoctls[code]; !ok {
 		return fmt.Errorf("refusing IOCTL %#x: not on drivecat's list of read-only queries", code)
+	}
+	if code != ioctlStorageQueryProperty {
+		if len(in) != 0 {
+			return fmt.Errorf("refusing IOCTL %#x with input: it takes none", code)
+		}
+		return nil
+	}
+	if len(in) != 12 || !allowedProperties[binary.LittleEndian.Uint32(in[0:4])] ||
+		binary.LittleEndian.Uint32(in[4:8]) != propertyStandardQuery {
+		return fmt.Errorf("refusing IOCTL_STORAGE_QUERY_PROPERTY: only standard queries of properties 0 and 7")
 	}
 	return nil
 }

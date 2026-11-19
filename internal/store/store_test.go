@@ -14,8 +14,8 @@ import (
 
 func createTemp(t *testing.T) (*Store, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "sub", "drivecat.db")
-	s, err := Create(context.Background(), path)
+	path := filepath.Join(t.TempDir(), "drivecat.db")
+	s, err := Create(context.Background(), path, false)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestCreateSchema(t *testing.T) {
 func TestCreateRefusesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.db")
 	writeFile(t, path, "")
-	if s, err := Create(context.Background(), path); err == nil {
+	if s, err := Create(context.Background(), path, false); err == nil {
 		s.Close()
 		t.Fatal("Create took over an existing file")
 	}
@@ -125,7 +125,7 @@ func TestOpenRefusesForeignFilesUntouched(t *testing.T) {
 
 func TestRelativePathRefused(t *testing.T) {
 	ctx := context.Background()
-	if s, err := Create(ctx, "rel.db"); err == nil {
+	if s, err := Create(ctx, "rel.db", false); err == nil {
 		s.Close()
 		os.Remove("rel.db")
 		t.Error("Create accepted a relative path")

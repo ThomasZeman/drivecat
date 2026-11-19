@@ -16,11 +16,7 @@ import (
 	"github.com/ThomasZeman/drivecat/internal/readonly"
 )
 
-const (
-	storageDeviceProperty        = 0
-	storageDeviceSeekPenaltyProp = 7
-	fileIDInfoClass              = 18 // FILE_INFO_BY_HANDLE_CLASS FileIdInfo
-)
+const fileIDInfoClass = 18 // FILE_INFO_BY_HANDLE_CLASS FileIdInfo
 
 var (
 	mpr                   = windows.NewLazySystemDLL("mpr.dll")
@@ -30,8 +26,16 @@ var (
 // Identify finds the drive or share behind path and reads its identifiers.
 // It only reads: nothing is written to the drive.
 func Identify(path string) (*Identity, error) {
+	// Check before anything opens the path, and again after Abs, which
+	// turns a bare "COM3" into \\.\COM3.
+	if err := CheckSourcePath(path); err != nil {
+		return nil, err
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := CheckSourcePath(abs); err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(abs); err != nil {
@@ -212,7 +216,7 @@ func openDevice(name string) (windows.Handle, error) {
 // code that is not one of the known read-only queries, so a later edit
 // cannot slip in a code that changes a drive.
 func ioctl(h windows.Handle, code uint32, in []byte, outSize int) ([]byte, error) {
-	if err := checkIoctl(code); err != nil {
+	if err := checkIoctl(code, in); err != nil {
 		return nil, err
 	}
 	out := make([]byte, outSize)
@@ -228,10 +232,7 @@ func ioctl(h windows.Handle, code uint32, in []byte, outSize int) ([]byte, error
 }
 
 func queryProperty(h windows.Handle, propertyID uint32) ([]byte, error) {
-	// STORAGE_PROPERTY_QUERY: PropertyId, QueryType (PropertyStandardQuery = 0), AdditionalParameters[1]
-	q := make([]byte, 12)
-	binary.LittleEndian.PutUint32(q[0:4], propertyID)
-	return ioctl(h, ioctlStorageQueryProperty, q, 4096)
+	return ioctl(h, ioctlStorageQueryProperty, propertyQuery(propertyID), 4096)
 }
 
 func partitionInfoOf(vol windows.Handle) (partitionInfo, error) {

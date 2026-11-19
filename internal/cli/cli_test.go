@@ -26,7 +26,7 @@ func TestHelp(t *testing.T) {
 }
 
 func TestInitAndEmptySources(t *testing.T) {
-	db := filepath.Join(t.TempDir(), "x", "drivecat.db")
+	db := filepath.Join(t.TempDir(), "drivecat.db")
 
 	code, out, errOut := run(t, "--db", db, "init")
 	if code != 0 || !strings.Contains(out, "schema version 1") {
@@ -104,8 +104,8 @@ func TestDBPathMustBeAbsolute(t *testing.T) {
 func TestDefaultDBPath(t *testing.T) {
 	t.Setenv("DRIVECAT_DB", "")
 	t.Setenv("LOCALAPPDATA", `C:\Users\someone\AppData\Local`)
-	got, err := resolveDBPath("")
-	if err != nil || got != `C:\Users\someone\AppData\Local\drivecat\drivecat.db` {
+	got, isDefault, err := resolveDBPath("")
+	if err != nil || !isDefault || got != `C:\Users\someone\AppData\Local\drivecat\drivecat.db` {
 		t.Fatalf("resolveDBPath = %q, %v", got, err)
 	}
 }
@@ -150,5 +150,27 @@ func TestFormatBytes(t *testing.T) {
 		if got := formatBytes(n); got != want {
 			t.Errorf("formatBytes(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestInitDoesNotCreateFoldersForDBFlag(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Bakup")
+	if code, _, _ := run(t, "--db", filepath.Join(dir, "drivecat.db"), "init"); code != 1 {
+		t.Fatalf("init in a missing folder: code %d, want 1", code)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("init created the folder given with --db")
+	}
+}
+
+func TestInitCreatesDefaultFolder(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("DRIVECAT_DB", "")
+	t.Setenv("LOCALAPPDATA", base)
+	if code, _, errOut := run(t, "init"); code != 0 {
+		t.Fatalf("init: %s", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(base, "drivecat", "drivecat.db")); err != nil {
+		t.Fatalf("default database not created: %v", err)
 	}
 }

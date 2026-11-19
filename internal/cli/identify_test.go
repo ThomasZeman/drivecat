@@ -66,7 +66,7 @@ func TestIdentifyUnknownDoesNotCreateDB(t *testing.T) {
 func TestIdentifyKnownSource(t *testing.T) {
 	fakeIdentify(t, usbIdentity(), nil)
 	db := filepath.Join(t.TempDir(), "drivecat.db")
-	s, err := store.Create(context.Background(), db)
+	s, err := store.Create(context.Background(), db, false)
 	if err != nil {
 		t.Fatal(err)
 	}

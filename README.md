@@ -26,6 +26,8 @@ drivecat scan E:\ --label "WD 2TB black"
 drivecat scan \\nas\photos --label "NAS photos"
 drivecat identify \\nas
 drivecat scan \\nas --label NAS
+drivecat report
+drivecat report --top 50 --json
 ```
 
 Given only a server (`\\nas` or `\\192.168.1.20`), `identify` lists its shares and `scan` scans each one as its own
@@ -36,9 +38,8 @@ path. A share is recognized by server and share name, so always use the same nam
 
 The database defaults to `%LOCALAPPDATA%\drivecat\drivecat.db`; override it with `--db PATH` or `DRIVECAT_DB`,
 which must be an absolute path on a drive letter (not a UNC path). Only `init` creates a database, and only in a
-folder that already exists; the default `drivecat` folder is the one folder it creates itself. `sources` and
-`identify` open the database read-only.
-`report` is planned and not implemented yet.
+folder that already exists; the default `drivecat` folder is the one folder it creates itself. `sources`,
+`identify` and `report` open the database read-only.
 
 ### Scanning
 
@@ -63,6 +64,23 @@ rename it, if `--label` is given again).
   it.
 - The scan refuses to run if the database is inside the folder being scanned, and warns if it is on the same
   drive.
+- Errors are printed as they happen; `-v` prints every file with its checksum. The progress and summary count
+  files whose content is already recorded on another source, and the summary names those sources.
+
+### Report
+
+`report` compares everything recorded so far by checksum:
+
+- all sources: files and bytes, unique content (each checksum counted once), and the extra copies beyond it;
+- per source: files, size, copies inside the source, and what is **only here**: content found on no other source,
+  so losing that source would lose it;
+- the largest duplicates by extra bytes (`--top N`, default 10, `0` to leave them out), with up to five places each.
+
+Empty files are counted, but never listed as duplicates, since they all share one checksum. `--json` prints the
+same data for scripts.
+
+Not handled yet: a file deleted or renamed on a drive keeps its row after the next scan (with an older `seen_at`),
+so the report still counts it under its old path.
 
 ## Read-only towards your drives
 

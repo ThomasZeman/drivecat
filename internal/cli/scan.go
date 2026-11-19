@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,7 +177,11 @@ func (e *env) scanOne(s *store.Store, id *volume.Identity, opt scan.Options, ver
 	fmt.Fprintf(e.stdout, "Scanning %s\n", scan.Root(id))
 	stats, err := scan.Scan(e.ctx, s, id, opt)
 	if stats.ScanID != 0 {
-		printScanSummary(e.stdout, stats)
+		labels, lerr := s.Labels(context.WithoutCancel(e.ctx))
+		if lerr != nil {
+			labels = nil // the summary then shows source ids
+		}
+		printScanSummary(e.stdout, stats, labels)
 	}
 	return err
 }
@@ -207,11 +213,12 @@ func progressLine(st scan.Stats) string {
 	if secs := st.Elapsed.Seconds(); secs > 0 {
 		rate = ", " + formatBytes(int64(float64(st.HashedBytes)/secs)) + "/s"
 	}
-	return fmt.Sprintf("%s files (%s unchanged), %s read, %s%s",
-		group(st.Files), group(st.Reused), formatBytes(st.HashedBytes), plural(st.Errors, "error"), rate)
+	return fmt.Sprintf("%s files (%s unchanged, %s on other sources), %s read, %s%s",
+		group(st.Files), group(st.Reused), group(st.Elsewhere), formatBytes(st.HashedBytes),
+		plural(st.Errors, "error"), rate)
 }
 
-func printScanSummary(w io.Writer, st scan.Stats) {
+func printScanSummary(w io.Writer, st scan.Stats, labels map[int64]string) {
 	status := "Done"
 	if st.Aborted {
 		status = "Aborted"
@@ -224,6 +231,34 @@ func printScanSummary(w io.Writer, st scan.Stats) {
 		st.Elapsed.Round(time.Second))
 	fmt.Fprintf(w, "  %s\n", progressLine(st))
 	fmt.Fprintf(w, "  %s files hashed, %s folders skipped\n", group(st.Hashed), group(st.SkippedDirs))
+	if st.Elsewhere > 0 {
+		fmt.Fprintf(w, "  %s files (%s) already on other sources: %s\n", group(st.Elsewhere),
+			formatBytes(st.ElsewhereBytes), elsewhereList(st.ElsewhereBySource, labels))
+	}
+}
+
+// elsewhereList names the sources that already had files, most files first:
+// "WD 2TB black 4,210, NAS photos 12".
+func elsewhereList(bySource map[int64]int64, labels map[int64]string) string {
+	ids := make([]int64, 0, len(bySource))
+	for id := range bySource {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if bySource[ids[i]] != bySource[ids[j]] {
+			return bySource[ids[i]] > bySource[ids[j]]
+		}
+		return ids[i] < ids[j]
+	})
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		name, ok := labels[id]
+		if !ok {
+			name = fmt.Sprintf("source %d", id)
+		}
+		parts[i] = fmt.Sprintf("%s %s", name, group(bySource[id]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // group writes n with thousands separators: 1234567 -> 1,234,567.

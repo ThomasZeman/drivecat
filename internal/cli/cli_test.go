@@ -66,10 +66,22 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
-func TestNotImplementedYet(t *testing.T) {
+func TestReportWithoutData(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "drivecat.db")
-	if code, _, errOut := run(t, "--db", db, "report"); code != 1 || !strings.Contains(errOut, "not implemented") {
-		t.Errorf("report: code %d, stderr %q", code, errOut)
+	if code, _, errOut := run(t, "--db", db, "report"); code != 1 || !strings.Contains(errOut, "drivecat init") {
+		t.Errorf("report without database: code %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(db); err == nil {
+		t.Error("report created a database")
+	}
+	run(t, "--db", db, "init")
+	if code, out, _ := run(t, "--db", db, "report"); code != 0 || !strings.Contains(out, "No sources yet") {
+		t.Errorf("report of an empty database: code %d, out %q", code, out)
+	}
+	for _, args := range [][]string{{"report", "extra"}, {"report", "--top", "-1"}} {
+		if code, _, _ := run(t, append([]string{"--db", db}, args...)...); code != 2 {
+			t.Errorf("%v: code %d, want 2", args, code)
+		}
 	}
 }
 

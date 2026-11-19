@@ -67,9 +67,17 @@ type Stats struct {
 	Reused      int64 // unchanged files whose checksum came from an earlier scan
 	Errors      int64 // files recorded without a checksum
 	SkippedDirs int64 // folders not entered: links, system folders, unreadable
-	LastPath    string
-	Elapsed     time.Duration
-	Aborted     bool
+
+	// Elsewhere counts files whose content is already recorded on another
+	// source; ElsewhereBySource attributes each to the source with the
+	// lowest id that has it. Empty files are left out: they all match.
+	Elsewhere         int64
+	ElsewhereBytes    int64
+	ElsewhereBySource map[int64]int64
+
+	LastPath string
+	Elapsed  time.Duration
+	Aborted  bool
 }
 
 // batchSize and flushEvery bound how much work an interrupted scan loses.
@@ -263,6 +271,22 @@ func (r *run) write(ctx context.Context, results <-chan result, cancel func()) e
 				s.Reused++
 			case failed:
 				s.Errors++
+			}
+			if res.row.SHA256 != nil && res.row.Size > 0 {
+				other, found, err := r.st.OtherSourceWith(ctx, res.row.SHA256, r.sourceID)
+				if err != nil {
+					writeErr = fmt.Errorf("look up %s on other sources: %w", res.row.RelPath, err)
+					cancel()
+					continue
+				}
+				if found {
+					s.Elsewhere++
+					s.ElsewhereBytes += res.row.Size
+					if s.ElsewhereBySource == nil {
+						s.ElsewhereBySource = map[int64]int64{}
+					}
+					s.ElsewhereBySource[other]++
+				}
 			}
 			if r.opt.File != nil {
 				r.opt.File(res.row, res.kind == reused)

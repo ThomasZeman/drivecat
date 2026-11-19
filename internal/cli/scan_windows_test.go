@@ -169,3 +169,38 @@ func TestScanServerScansEachShare(t *testing.T) {
 		t.Errorf("identify server: code %d, out %q", code, out)
 	}
 }
+
+func TestScanShowsFilesOnOtherSourcesAndReport(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for _, dir := range []string{a, b} {
+		os.WriteFile(filepath.Join(dir, "shared.jpg"), []byte("the same photo"), 0o644)
+	}
+	os.WriteFile(filepath.Join(b, "new.jpg"), []byte("only on b"), 0o644)
+	// Two folders on one drive would be one source; give each its own.
+	origID := identifyFunc
+	identifyFunc = func(p string) (*volume.Identity, error) {
+		id, err := origID(p)
+		if err == nil {
+			id.Fingerprint = "test:" + p
+		}
+		return id, err
+	}
+	t.Cleanup(func() { identifyFunc = origID })
+
+	db := filepath.Join(t.TempDir(), "drivecat.db")
+	run(t, "--db", db, "init")
+	run(t, "--db", db, "scan", a, "--label", "Drive A")
+	code, out, errOut := run(t, "--db", db, "scan", b, "--label", "Drive B")
+	if code != 0 || !strings.Contains(out, "1 files (14 B) already on other sources: Drive A 1") {
+		t.Errorf("scan B: code %d, out %q, stderr %q", code, out, errOut)
+	}
+
+	code, out, _ = run(t, "--db", db, "report")
+	if code != 0 || !strings.Contains(out, "Largest duplicates (1)") || !strings.Contains(out, "Drive A: ") ||
+		!strings.Contains(out, "Drive B: ") {
+		t.Errorf("report: code %d, out %q", code, out)
+	}
+	if code, out, _ = run(t, "--db", db, "report", "--json"); code != 0 || !strings.Contains(out, `"only_here_files"`) {
+		t.Errorf("report --json: code %d, out %q", code, out)
+	}
+}

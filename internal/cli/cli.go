@@ -31,7 +31,9 @@ Commands:
                     (--label NAME for a new drive or share, --workers N,
                     --rehash to read unchanged files again,
                     -v / --verbose to print every file with its SHA-256)
-  report            show total versus unique files and bytes
+  report            show total versus unique files and bytes, per source what
+                    exists nowhere else, and the largest duplicates
+                    (--top N duplicates, default 10; --json)
   version           print the version
 
 Global flags:
@@ -106,7 +108,7 @@ func (e *env) dispatch(cmd string, args []string) error {
 	case "scan":
 		return e.runScan(args)
 	case "report":
-		return fmt.Errorf("%s is not implemented yet", cmd)
+		return e.runReport(args)
 	}
 	return fmt.Errorf("%w: unknown command %q", errUsage, cmd)
 }

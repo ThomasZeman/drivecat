@@ -47,7 +47,7 @@ const module = "github.com/ThomasZeman/drivecat"
 var allowedImports = map[string][]string{
 	"cmd/drivecat": {"context", "os", "os/signal", module + "/internal/cli"},
 	"internal/cli": {"context", "encoding/json", "errors", "flag", "fmt", "io", "os", "path/filepath",
-		"strconv", "strings", "sync", "text/tabwriter", "time", module + "/internal/scan",
+		"sort", "strconv", "strings", "sync", "text/tabwriter", "time", module + "/internal/scan",
 		module + "/internal/store", module + "/internal/volume"},
 	"internal/readonly": {"encoding/binary", "errors", "fmt", "golang.org/x/sys/windows", "os", "strings", "sync",
 		"time", "unicode/utf16"},

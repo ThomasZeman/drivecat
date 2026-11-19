@@ -137,6 +137,38 @@ func (s *Store) LookupFile(ctx context.Context, sourceID int64, relPath string) 
 	return k, true, nil
 }
 
+// OtherSourceWith reports whether a file with this checksum is recorded on
+// a source other than sourceID, and returns the lowest such source id.
+func (s *Store) OtherSourceWith(ctx context.Context, sha256 []byte, sourceID int64) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT min(source_id) FROM files WHERE sha256 = ? AND source_id != ? HAVING count(*) > 0",
+		sha256, sourceID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	return id, err == nil, err
+}
+
+// Labels returns every source's label by id.
+func (s *Store) Labels(ctx context.Context) (map[int64]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, label FROM sources")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var label string
+		if err := rows.Scan(&id, &label); err != nil {
+			return nil, err
+		}
+		out[id] = label
+	}
+	return out, rows.Err()
+}
+
 // FileRow is one file as a scan found it.
 type FileRow struct {
 	RelPath string

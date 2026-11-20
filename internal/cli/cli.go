@@ -36,6 +36,9 @@ Commands:
                     (--top N duplicates, default 10; --json)
   duplicates        list every file that exists more than once, with all its
                     copies (--source NAME|ID, --min-size SIZE like 1M, --json)
+  forget SOURCE     remove a source (label or id) and its files from the
+                    database; shows what would go unless --yes is given.
+                    Nothing on the drive or share is touched
   version           print the version
 
 Global flags:
@@ -113,6 +116,8 @@ func (e *env) dispatch(cmd string, args []string) error {
 		return e.runReport(args)
 	case "duplicates":
 		return e.runDuplicates(args)
+	case "forget":
+		return e.runForget(args)
 	}
 	return fmt.Errorf("%w: unknown command %q", errUsage, cmd)
 }

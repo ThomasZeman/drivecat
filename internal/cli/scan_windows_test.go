@@ -235,6 +235,42 @@ func TestDuplicatesCommand(t *testing.T) {
 	}
 }
 
+func TestForgetCommand(t *testing.T) {
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644)
+	db := filepath.Join(t.TempDir(), "drivecat.db")
+	run(t, "--db", db, "init")
+	run(t, "--db", db, "scan", src, "--label", "Old disk")
+
+	// Without --yes nothing is deleted.
+	code, out, errOut := run(t, "--db", db, "forget", "old disk")
+	if code != 0 || !strings.Contains(out, `This would remove source 1 "Old disk"`) ||
+		!strings.Contains(out, "1 file (5 B) and 1 scan") || !strings.Contains(out, "--yes") {
+		t.Errorf("dry run: code %d, out %q, stderr %q", code, out, errOut)
+	}
+	if _, out, _ = run(t, "--db", db, "sources"); !strings.Contains(out, "Old disk") {
+		t.Errorf("source gone after a dry run: %q", out)
+	}
+
+	code, out, errOut = run(t, "--db", db, "forget", "1", "--yes")
+	if code != 0 || !strings.Contains(out, `Removed source 1 "Old disk"`) {
+		t.Errorf("forget --yes: code %d, out %q, stderr %q", code, out, errOut)
+	}
+	if _, out, _ = run(t, "--db", db, "sources"); strings.Contains(out, "Old disk") {
+		t.Errorf("source still listed: %q", out)
+	}
+	if b, err := os.ReadFile(filepath.Join(src, "a.txt")); err != nil || string(b) != "hello" {
+		t.Errorf("source file changed: %q, %v", b, err)
+	}
+
+	if code, _, _ = run(t, "--db", db, "forget", "Old disk", "--yes"); code != 1 {
+		t.Errorf("forgetting an unknown source: code %d", code)
+	}
+	if code, _, _ = run(t, "--db", db, "forget"); code != 2 {
+		t.Errorf("forget without a source: code %d", code)
+	}
+}
+
 func TestParseSize(t *testing.T) {
 	for in, want := range map[string]int64{"500": 500, "64K": 65536, "1.5M": 1572864, "2g": 2 << 30, "1MiB": 1 << 20} {
 		if got, err := parseSize(in); err != nil || got != want {

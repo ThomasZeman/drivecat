@@ -29,6 +29,7 @@ drivecat scan \\nas --label NAS
 drivecat report
 drivecat report --top 50 --json
 drivecat duplicates --source "NAS photos" --min-size 1M
+drivecat forget "NAS home" --yes
 ```
 
 Given only a server (`\\nas` or `\\192.168.1.20`), `identify` lists its shares and `scan` scans each one as its own
@@ -40,7 +41,7 @@ path. A share is recognized by server and share name, so always use the same nam
 The database defaults to `%LOCALAPPDATA%\drivecat\drivecat.db`; override it with `--db PATH` or `DRIVECAT_DB`,
 which must be an absolute path on a drive letter (not a UNC path). Only `init` creates a database, and only in a
 folder that already exists; the default `drivecat` folder is the one folder it creates itself. `sources`,
-`identify` and `report` open the database read-only.
+`identify`, `report` and `duplicates` open the database read-only.
 
 ### Scanning
 
@@ -84,6 +85,10 @@ same data for scripts.
 date), largest extra bytes first, and ends with the totals. `--source NAME` (or the id from `sources`) keeps only
 files with a copy on that source, and still lists their copies elsewhere; `--min-size 1M` leaves out small files;
 `--json` prints one object per line. It opens the database read-only, like `report`.
+
+`forget SOURCE` removes a source (by label or id) from the database together with its files and scans, for
+example a share that turned out to be another view of one already scanned. Without `--yes` it only shows what
+would be removed. Nothing on the drive or share is touched; scanning it again adds it back as a new source.
 
 Not handled yet: a file deleted or renamed on a drive keeps its row after the next scan (with an older `seen_at`),
 so `report` and `duplicates` still count it under its old path.

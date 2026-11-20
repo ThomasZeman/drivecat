@@ -170,6 +170,35 @@ func TestDuplicates(t *testing.T) {
 	}
 }
 
+func TestForgetSource(t *testing.T) {
+	s, _ := createTemp(t)
+	ctx := context.Background()
+	a := addSource(t, s, "A", map[string]string{"/x": "shared", "/y": "only-a", "/z": "!"})
+	b := addSource(t, s, "B", map[string]string{"/x": "shared"})
+
+	want := SourceContents{Files: 3, Bytes: 6 + 6 + 1, Scans: 1}
+	if c, err := s.SourceContents(ctx, a); err != nil || c != want {
+		t.Fatalf("contents of A = %+v, %v; want %+v", c, err, want)
+	}
+	if c, err := s.ForgetSource(ctx, a); err != nil || c != want {
+		t.Fatalf("forget A = %+v, %v; want %+v", c, err, want)
+	}
+
+	// A is gone completely; B and its files are untouched.
+	for _, q := range []string{"sources WHERE id = ?", "scans WHERE source_id = ?", "files WHERE source_id = ?"} {
+		var n int
+		if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM "+q, a).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s: %d rows left, %v", q, n, err)
+		}
+	}
+	if c, err := s.SourceContents(ctx, b); err != nil || c.Files != 1 || c.Scans != 1 {
+		t.Errorf("B after forgetting A = %+v, %v", c, err)
+	}
+	if _, err := s.ForgetSource(ctx, a); err == nil {
+		t.Error("forgetting a missing source succeeded")
+	}
+}
+
 func TestResolveSource(t *testing.T) {
 	s, _ := createTemp(t)
 	ctx := context.Background()

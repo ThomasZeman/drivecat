@@ -204,3 +204,41 @@ func TestScanShowsFilesOnOtherSourcesAndReport(t *testing.T) {
 		t.Errorf("report --json: code %d, out %q", code, out)
 	}
 }
+
+func TestDuplicatesCommand(t *testing.T) {
+	src := t.TempDir()
+	for _, name := range []string{"IMG_0130.JPG", "IMG_0130 2.JPG"} {
+		os.WriteFile(filepath.Join(src, name), []byte("the same photo"), 0o644)
+	}
+	os.WriteFile(filepath.Join(src, "other.JPG"), []byte("different"), 0o644)
+	db := filepath.Join(t.TempDir(), "drivecat.db")
+	run(t, "--db", db, "init")
+	run(t, "--db", db, "scan", src, "--label", "Family")
+
+	code, out, errOut := run(t, "--db", db, "duplicates", "--source", "family")
+	if code != 0 || !strings.Contains(out, "2 copies of 14 B") || !strings.Contains(out, "/IMG_0130 2.JPG") ||
+		!strings.Contains(out, "1 files exist more than once: 1 extra copies") || strings.Contains(out, "other.JPG") {
+		t.Errorf("duplicates: code %d, out %q, stderr %q", code, out, errOut)
+	}
+	if code, out, _ = run(t, "--db", db, "duplicates", "--min-size", "1K"); code != 0 ||
+		!strings.Contains(out, "No duplicates found") {
+		t.Errorf("--min-size 1K: code %d, out %q", code, out)
+	}
+	if code, out, _ = run(t, "--db", db, "duplicates", "--json"); code != 0 || !strings.Contains(out, `"extra_bytes":14`) {
+		t.Errorf("--json: code %d, out %q", code, out)
+	}
+	if code, _, errOut = run(t, "--db", db, "duplicates", "--source", "nope"); code != 1 {
+		t.Errorf("unknown source: code %d, stderr %q", code, errOut)
+	}
+	if code, _, _ = run(t, "--db", db, "duplicates", "--min-size", "lots"); code != 2 {
+		t.Errorf("bad size: code %d", code)
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	for in, want := range map[string]int64{"500": 500, "64K": 65536, "1.5M": 1572864, "2g": 2 << 30, "1MiB": 1 << 20} {
+		if got, err := parseSize(in); err != nil || got != want {
+			t.Errorf("parseSize(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+}

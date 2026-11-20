@@ -28,6 +28,7 @@ drivecat identify \\nas
 drivecat scan \\nas --label NAS
 drivecat report
 drivecat report --top 50 --json
+drivecat duplicates --source "NAS photos" --min-size 1M
 ```
 
 Given only a server (`\\nas` or `\\192.168.1.20`), `identify` lists its shares and `scan` scans each one as its own
@@ -79,8 +80,13 @@ rename it, if `--label` is given again).
 Empty files are counted, but never listed as duplicates, since they all share one checksum. `--json` prints the
 same data for scripts.
 
+`duplicates` lists every file that exists more than once with all of its copies (source, path and modification
+date), largest extra bytes first, and ends with the totals. `--source NAME` (or the id from `sources`) keeps only
+files with a copy on that source, and still lists their copies elsewhere; `--min-size 1M` leaves out small files;
+`--json` prints one object per line. It opens the database read-only, like `report`.
+
 Not handled yet: a file deleted or renamed on a drive keeps its row after the next scan (with an older `seen_at`),
-so the report still counts it under its old path.
+so `report` and `duplicates` still count it under its old path.
 
 ## Read-only towards your drives
 

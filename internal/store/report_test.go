@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,5 +130,62 @@ func TestOtherSourceWith(t *testing.T) {
 	}
 	if _, found, err := s.OtherSourceWith(ctx, sum("only-a"), a); err != nil || found {
 		t.Errorf("only-a from A: found %v, %v", found, err)
+	}
+}
+
+func TestDuplicates(t *testing.T) {
+	s, _ := createTemp(t)
+	ctx := context.Background()
+	big := string(bytes.Repeat([]byte("v"), 2000))
+	a := addSource(t, s, "A", map[string]string{
+		"/x.jpg": "photo", "/x 2.jpg": "photo", "/v.mp4": big, "/e1": "", "/e2": "", "/solo": "solo",
+	})
+	addSource(t, s, "B", map[string]string{"/v.mp4": big, "/w.mp4": big, "/only-b": "b", "/only-b2": "b"})
+
+	collect := func(f DuplicateFilter) []Duplicate {
+		t.Helper()
+		var out []Duplicate
+		if err := s.Duplicates(ctx, f, func(d Duplicate) error { out = append(out, d); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	all := collect(DuplicateFilter{})
+	// big (3 copies, 4000 extra), "photo" (2 copies), "b" (2 copies); never
+	// the empty files.
+	if len(all) != 3 || !bytes.Equal(all[0].SHA256, sum(big)) || all[0].Extra != 4000 || len(all[0].Copies) != 3 {
+		t.Fatalf("all = %+v", all)
+	}
+	if c := all[0].Copies; c[0].Source != "A" || c[0].Path != "/v.mp4" || c[1].Source != "B" || c[2].Path != "/w.mp4" {
+		t.Errorf("copies of the largest group are not ordered by source and path: %+v", c)
+	}
+
+	// Source A: groups with a copy on A, other copies included.
+	if onA := collect(DuplicateFilter{SourceID: a}); len(onA) != 2 || len(onA[0].Copies) != 3 {
+		t.Errorf("source A = %+v", onA)
+	}
+	if large := collect(DuplicateFilter{MinSize: 1000}); len(large) != 1 {
+		t.Errorf("min size 1000 = %+v", large)
+	}
+}
+
+func TestResolveSource(t *testing.T) {
+	s, _ := createTemp(t)
+	ctx := context.Background()
+	a := addSource(t, s, "Family Photos", nil)
+	if id, label, err := s.ResolveSource(ctx, "family photos"); err != nil || id != a || label != "Family Photos" {
+		t.Errorf("by label: %d %q %v", id, label, err)
+	}
+	if id, _, err := s.ResolveSource(ctx, strconv.FormatInt(a, 10)); err != nil || id != a {
+		t.Errorf("by id: %d %v", id, err)
+	}
+	if _, _, err := s.ResolveSource(ctx, "nope"); err == nil {
+		t.Error("unknown label accepted")
+	}
+	// Two sources with one label must be told apart by id.
+	s.UpsertSource(ctx, SourceInfo{Kind: "disk", Fingerprint: "other", Label: "family photos"}, time.Now())
+	if _, _, err := s.ResolveSource(ctx, "Family Photos"); err == nil || !strings.Contains(err.Error(), "id") {
+		t.Errorf("ambiguous label: %v", err)
 	}
 }

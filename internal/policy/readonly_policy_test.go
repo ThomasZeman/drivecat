@@ -57,8 +57,8 @@ var allowedImports = map[string][]string{
 		"sync/atomic", "time", "golang.org/x/text/unicode/norm", module + "/internal/readonly",
 		module + "/internal/store", module + "/internal/volume"},
 	"internal/store": {"bytes", "context", "database/sql", "database/sql/driver", "encoding/binary",
-		"errors", "fmt", "io", "io/fs", "modernc.org/sqlite", "net/url", "os", "path/filepath", "strings",
-		"time", module + "/internal/readonly"},
+		"errors", "fmt", "io", "io/fs", "modernc.org/sqlite", "net/url", "os", "path/filepath", "strconv",
+		"strings", "time", module + "/internal/readonly"},
 	"internal/volume": {"encoding/binary", "errors", "fmt", "golang.org/x/sys/windows", "io", "os",
 		"path/filepath", "sort", "strings", "unsafe", module + "/internal/readonly"},
 }
